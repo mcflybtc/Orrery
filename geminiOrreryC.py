@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-# orrery_pro_v7.py
-# Versão completa e profissional com todas as funcionalidades solicitadas e correções.
+# orrery_pro_v8_final.py
+# Versão completa, profissional e robusta com fallback de fuso horário,
+# código completo e todas as funcionalidades solicitadas.
 
 import math
 import sys
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-# Importações específicas e novas funcionalidades
+# Importações da biblioteca de astronomia
 import astronomy
 from astronomy import (
     Body, Observer, Time, Direction, Refraction, ApsisKind, EclipseKind,
@@ -19,39 +20,55 @@ from astronomy import (
     SearchMoonQuarter, NextMoonQuarter, Search
 )
 
-# --- Configurações Globais ---
+# --- Classe de Fallback para Fuso Horário Fixo ---
+class FixedTimeZone(tzinfo):
+    """Uma classe para representar fusos horários com um deslocamento UTC fixo."""
+    def __init__(self, offset_hours, name):
+        self._offset = timedelta(hours=offset_hours)
+        self._name = name
 
+    def utcoffset(self, dt):
+        return self._offset
+
+    def dst(self, dt):
+        return timedelta(0)
+
+    def tzname(self, dt):
+        return self._name
+
+# --- Configurações Globais ---
+# Formato: "Cidade": ((lat, lon), "Nome IANA do Fuso", Deslocamento UTC fixo em horas ou None)
 CITIES = {
-    "Amsterdam, Netherlands": ((52.3676, 4.9041), "Europe/Amsterdam"),
-    "Auckland, NZ": ((-36.8485, 174.7633), "Pacific/Auckland"),
-    "Bangkok, Thailand": ((13.7563, 100.5018), "Asia/Bangkok"),
-    "Beijing, China": ((39.9042, 116.4074), "Asia/Shanghai"),
-    "Berlin, Germany": ((52.5200, 13.4050), "Europe/Berlin"),
-    "Buenos Aires, Argentina": ((-34.6037, -58.3816), "America/Argentina/Buenos_Aires"),
-    "Cairo, Egypt": ((30.0444, 31.2357), "Africa/Cairo"),
-    "Cape Town, South Africa": ((-33.9249, 18.4241), "Africa/Johannesburg"),
-    "Delhi, India": ((28.7041, 77.1025), "Asia/Kolkata"),
-    "Dubai, UAE": ((25.2048, 55.2708), "Asia/Dubai"),
-    "Fortaleza, Brazil": ((-3.71722, -38.5434), "America/Fortaleza"),
-    "Hong Kong": ((22.3193, 114.1694), "Asia/Hong_Kong"),
-    "Istanbul, Turkey": ((41.0082, 28.9784), "Europe/Istanbul"),
-    "Lagos, Nigeria": ((6.5244, 3.3792), "Africa/Lagos"),
-    "Lisbon, Portugal": ((38.7223, -9.1393), "Europe/Lisbon"),
-    "London, UK": ((51.5074, -0.1278), "Europe/London"),
-    "Los Angeles, USA": ((34.0522, -118.2437), "America/Los_Angeles"),
-    "Mexico City, Mexico": ((19.4326, -99.1332), "America/Mexico_City"),
-    "Moscow, Russia": ((55.7558, 37.6176), "Europe/Moscow"),
-    "Mumbai, India": ((19.0760, 72.8777), "Asia/Kolkata"),
-    "New York, USA": ((40.7128, -74.0060), "America/New_York"),
-    "Paris, France": ((48.8566, 2.3522), "Europe/Paris"),
-    "Rio de Janeiro, Brazil": ((-22.9068, -43.1729), "America/Sao_Paulo"),
-    "Rome, Italy": ((41.9028, 12.4964), "Europe/Rome"),
-    "São Paulo, Brazil": ((-23.5505, -46.6333), "America/Sao_Paulo"),
-    "Seoul, South Korea": ((37.5665, 126.9780), "Asia/Seoul"),
-    "Singapore": ((1.3521, 103.8198), "Asia/Singapore"),
-    "Sydney, Australia": ((-33.8688, 151.2093), "Australia/Sydney"),
-    "Tokyo, Japan": ((35.6895, 139.6917), "Asia/Tokyo"),
-    "Toronto, Canada": ((43.6532, -79.3832), "America/Toronto"),
+    "Amsterdam, Netherlands": ((52.3676, 4.9041), "Europe/Amsterdam", None),
+    "Auckland, NZ": ((-36.8485, 174.7633), "Pacific/Auckland", None),
+    "Bangkok, Thailand": ((13.7563, 100.5018), "Asia/Bangkok", 7),
+    "Beijing, China": ((39.9042, 116.4074), "Asia/Shanghai", 8),
+    "Berlin, Germany": ((52.5200, 13.4050), "Europe/Berlin", None),
+    "Buenos Aires, Argentina": ((-34.6037, -58.3816), "America/Argentina/Buenos_Aires", -3),
+    "Cairo, Egypt": ((30.0444, 31.2357), "Africa/Cairo", None),
+    "Cape Town, South Africa": ((-33.9249, 18.4241), "Africa/Johannesburg", None),
+    "Delhi, India": ((28.7041, 77.1025), "Asia/Kolkata", 5.5),
+    "Dubai, UAE": ((25.2048, 55.2708), "Asia/Dubai", 4),
+    "Fortaleza, Brazil": ((-3.71722, -38.5434), "America/Fortaleza", -3),
+    "Hong Kong": ((22.3193, 114.1694), "Asia/Hong_Kong", 8),
+    "Istanbul, Turkey": ((41.0082, 28.9784), "Europe/Istanbul", None),
+    "Lagos, Nigeria": ((6.5244, 3.3792), "Africa/Lagos", 1),
+    "Lisbon, Portugal": ((38.7223, -9.1393), "Europe/Lisbon", None),
+    "London, UK": ((51.5074, -0.1278), "Europe/London", None),
+    "Los Angeles, USA": ((34.0522, -118.2437), "America/Los_Angeles", None),
+    "Mexico City, Mexico": ((19.4326, -99.1332), "America/Mexico_City", None),
+    "Moscow, Russia": ((55.7558, 37.6176), "Europe/Moscow", None),
+    "Mumbai, India": ((19.0760, 72.8777), "Asia/Kolkata", 5.5),
+    "New York, USA": ((40.7128, -74.0060), "America/New_York", None),
+    "Paris, France": ((48.8566, 2.3522), "Europe/Paris", None),
+    "Rio de Janeiro, Brazil": ((-22.9068, -43.1729), "America/Sao_Paulo", None),
+    "Rome, Italy": ((41.9028, 12.4964), "Europe/Rome", None),
+    "São Paulo, Brazil": ((-23.5505, -46.6333), "America/Sao_Paulo", None),
+    "Seoul, South Korea": ((37.5665, 126.9780), "Asia/Seoul", 9),
+    "Singapore": ((1.3521, 103.8198), "Asia/Singapore", 8),
+    "Sydney, Australia": ((-33.8688, 151.2093), "Australia/Sydney", None),
+    "Tokyo, Japan": ((35.6895, 139.6917), "Asia/Tokyo", 9),
+    "Toronto, Canada": ((43.6532, -79.3832), "America/Toronto", None),
 }
 
 BODIES = {
@@ -74,16 +91,16 @@ ASPECTS = {"Conjunção": (0.0, 8.0), "Oposição": (180.0, 8.0), "Quadratura": 
 PLANETS_FOR_ASPECTS = ["Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Pluto"]
 
 # --- Funções Auxiliares ---
-
 def fmt_num(x, nd=2):
     if x is None: return "—"
     if isinstance(x, float): return f"{x:.{nd}f}"
     return str(x)
 
-def to_local(t, tz_name):
-    if t is None or tz_name is None: return None
+def to_local(t, tz_info):
+    if t is None or tz_info is None: return None
     try:
-        return t.Utc().astimezone(ZoneInfo(tz_name))
+        utc_dt = t.Utc()
+        return utc_dt.astimezone(tz_info)
     except Exception:
         return None
 
@@ -118,7 +135,7 @@ class AstroCLI:
     def __init__(self):
         self.current_city_name = None
         self.observer = None
-        self.tz_name = None
+        self.tz_info = None
         self._initialize_stars()
 
     def _initialize_stars(self):
@@ -161,11 +178,31 @@ class AstroCLI:
             try:
                 idx = int(choice) - 1
                 if 0 <= idx < len(city_names):
-                    self.current_city_name = city_names[idx]
-                    coords, self.tz_name = CITIES[self.current_city_name]
+                    city_name_selection = city_names[idx]
+                    coords, tz_iana_name, fixed_offset = CITIES[city_name_selection]
+                    
+                    tz_object = None
+                    try:
+                        tz_object = ZoneInfo(tz_iana_name)
+                    except ZoneInfoNotFoundError:
+                        if fixed_offset is not None:
+                            print(f"\nAviso: Base de dados de fusos horários não encontrada. Usando deslocamento fixo para {city_name_selection}.")
+                            tz_object = FixedTimeZone(fixed_offset, f"UTC{fixed_offset:+d}")
+                        else:
+                            print("\n" + "="*50)
+                            print("!!! ERRO DE FUSO HORÁRIO !!!")
+                            print(f"O fuso horário '{tz_iana_name}' não foi encontrado. Este fuso tem regras complexas (horário de verão) e necessita de uma base de dados.")
+                            print("Para corrigir, abra o terminal e execute: py -m pip install tzdata")
+                            print("Depois, reinicie o programa.")
+                            print("="*50 + "\n")
+                            return False
+
+                    self.current_city_name = city_name_selection
+                    self.tz_info = tz_object
                     self.observer = Observer(coords[0], coords[1], 0.0)
                     print(f"Cidade selecionada: {self.current_city_name}")
                     return True
+
                 else: print("Número inválido.")
             except ValueError: print("Por favor, insira um número.")
 
@@ -260,9 +297,9 @@ class AstroCLI:
             info = body_infos.get(name, {})
             rows3.append([
                 name,
-                fmt_dt(to_local(info.get('Rise'), self.tz_name)),
-                fmt_dt(to_local(info.get('Transit'), self.tz_name)),
-                fmt_dt(to_local(info.get('Set'), self.tz_name)),
+                fmt_dt(to_local(info.get('Rise'), self.tz_info)),
+                fmt_dt(to_local(info.get('Transit'), self.tz_info)),
+                fmt_dt(to_local(info.get('Set'), self.tz_info)),
             ])
         self._print_table(rows3, headers3)
 
@@ -288,7 +325,7 @@ class AstroCLI:
         if aspects_found:
             print("\n--- Aspectos Astrológicos (baseado em Longitude Eclíptica) ---")
             self._print_table(aspects_found, ["Par", "Aspecto", "Separação Atual", "Orbe Restante"])
-    
+
     def _display_jupiter_moons(self):
         if not self._ensure_location(): return
         
@@ -326,7 +363,7 @@ class AstroCLI:
         col_widths = [35, 20]
         for r in rows:
             print(f"{r[0].ljust(col_widths[0])} : {r[1]}")
-            
+
     def _generate_daily_calendar(self):
         if not self._ensure_location(): return
         
@@ -337,11 +374,10 @@ class AstroCLI:
             if date_str:
                 user_date = datetime.strptime(date_str, "%Y-%m-%d")
             else:
-                user_date = datetime.now()
+                user_date = datetime.now(tz=self.tz_info)
 
-            tz = ZoneInfo(self.tz_name)
-            start_of_day_local = datetime(user_date.year, user_date.month, user_date.day, 0, 0, 0, tzinfo=tz)
-            end_of_day_local = datetime(user_date.year, user_date.month, user_date.day, 23, 59, 59, tzinfo=tz)
+            start_of_day_local = datetime(user_date.year, user_date.month, user_date.day, 0, 0, 0, tzinfo=self.tz_info)
+            end_of_day_local = datetime(user_date.year, user_date.month, user_date.day, 23, 59, 59, tzinfo=self.tz_info)
 
             start_time = Time.from_datetime(start_of_day_local)
             end_time = Time.from_datetime(end_of_day_local)
@@ -353,43 +389,40 @@ class AstroCLI:
 
             for name, body in bodies_to_check.items():
                 t = start_time
-                for _ in range(3): # Procura por até 3 eventos por dia para um corpo (ex: lua circumpolar)
-                    rise = SearchRiseSet(body, self.observer, Direction.Rise, t, 1.0)
-                    if rise and rise.ut < end_time.ut:
-                        events.append((rise, name, "Nasce"))
+                while t.ut < end_time.ut:
+                    # Encontra o próximo evento de qualquer tipo após o tempo 't'
+                    next_rise = SearchRiseSet(body, self.observer, Direction.Rise, t, 1.0)
+                    next_transit = SearchHourAngle(body, self.observer, 0.0, t, 1).time
+                    next_set = SearchRiseSet(body, self.observer, Direction.Set, t, 1.0)
                     
-                    transit = SearchHourAngle(body, self.observer, 0.0, t, 1).time
-                    if transit and transit.ut < end_time.ut:
-                        events.append((transit, name, "Culmina"))
+                    found_events = []
+                    if next_rise and next_rise.ut < end_time.ut: found_events.append((next_rise, name, "Nasce"))
+                    if next_transit and next_transit.ut < end_time.ut: found_events.append((next_transit, name, "Culmina"))
+                    if next_set and next_set.ut < end_time.ut: found_events.append((next_set, name, "Põe-se"))
 
-                    setting = SearchRiseSet(body, self.observer, Direction.Set, t, 1.0)
-                    if setting and setting.ut < end_time.ut:
-                        events.append((setting, name, "Põe-se"))
-
-                    # Avança o tempo de busca para depois do último evento encontrado para evitar duplicatas
-                    all_found = [e[0] for e in [ (rise, name, "Nasce"), (transit, name, "Culmina"), (setting, name, "Põe-se")] if e[0] and e[0].ut < end_time.ut]
-                    if not all_found:
-                        break
+                    if not found_events: break
                     
-                    last_found_time = max(all_found, key=lambda x: x.ut)
-                    t = last_found_time.AddDays(1.0 / (24 * 60)) # Avança 1 minuto
-                    if t.ut >= end_time.ut:
+                    found_events.sort(key=lambda x: x[0].ut)
+                    
+                    is_new = True
+                    for ev in events:
+                        if ev[1] == name and abs(ev[0].ut - found_events[0][0].ut) < 1e-4:
+                            is_new = False
+                            break
+                    
+                    if is_new:
+                        events.append(found_events[0])
+                        t = found_events[0][0].AddDays(1.0 / (24 * 60))
+                    else:
                         break
             
-            # Remove duplicatas
-            unique_events = []
-            seen = set()
-            for ev_time, ev_name, ev_type in sorted(events, key=lambda x: x[0].ut):
-                key = (ev_name, ev_type, round(ev_time.ut * 1440)) # Chave por minuto para evitar duplicatas próximas
-                if key not in seen:
-                    unique_events.append((ev_time, ev_name, ev_type))
-                    seen.add(key)
-
-            if not unique_events:
+            events.sort(key=lambda x: x[0].ut)
+            
+            if not events:
                 print("Nenhum evento de nascer/culminar/pôr encontrado para os principais astros nesta data.")
                 return
 
-            rows = [[fmt_dt(to_local(t, self.tz_name)), n, e, get_constellation(bodies_to_check[n], t, self.observer)] for t, n, e in unique_events]
+            rows = [[fmt_dt(to_local(t, self.tz_info)), n, e, get_constellation(bodies_to_check[n], t, self.observer)] for t, n, e in events]
             self._print_table(rows, ["Horário Local", "Astro", "Evento", "Constelação"])
             
         except ValueError:
@@ -417,7 +450,7 @@ class AstroCLI:
 
         for _ in range(5):
             mq = NextMoonQuarter(mq)
-            local_time = to_local(mq.time, self.tz_name)
+            local_time = to_local(mq.time, self.tz_info)
             if local_time and local_time.year == year and local_time.month == month:
                 const = get_constellation(Body.Moon, mq.time, self.observer)
                 events.append([phase_names[mq.quarter], fmt_dt(local_time), const])
@@ -434,7 +467,7 @@ class AstroCLI:
                 const = get_constellation(Body.Moon, current_apsis.time, self.observer)
                 
                 print(f"\nPróximo evento: {kind_str}")
-                print(f"  Data (local): {fmt_dt(to_local(current_apsis.time, self.tz_name))}")
+                print(f"  Data (local): {fmt_dt(to_local(current_apsis.time, self.tz_info))}")
                 print(f"  Distância   : {fmt_num(current_apsis.dist_km, 0)} km")
                 print(f"  Constelação : {const}")
                 
@@ -507,14 +540,14 @@ class AstroCLI:
                     print(f"Obscurecimento máximo: {fmt_num(eclipse.obscuration * 100, 2)}%")
                     
                     rows = [
-                        ["Início Parcial", fmt_dt(to_local(eclipse.partial_begin.time, self.tz_name)), f"{fmt_num(eclipse.partial_begin.altitude, 2)}°"],
-                        ["Pico do Eclipse", fmt_dt(to_local(eclipse.peak.time, self.tz_name)), f"{fmt_num(eclipse.peak.altitude, 2)}°"],
-                        ["Fim Parcial", fmt_dt(to_local(eclipse.partial_end.time, self.tz_name)), f"{fmt_num(eclipse.partial_end.altitude, 2)}°"],
+                        ["Início Parcial", fmt_dt(to_local(eclipse.partial_begin.time, self.tz_info)), f"{fmt_num(eclipse.partial_begin.altitude, 2)}°"],
+                        ["Pico do Eclipse", fmt_dt(to_local(eclipse.peak.time, self.tz_info)), f"{fmt_num(eclipse.peak.altitude, 2)}°"],
+                        ["Fim Parcial", fmt_dt(to_local(eclipse.partial_end.time, self.tz_info)), f"{fmt_num(eclipse.partial_end.altitude, 2)}°"],
                     ]
                     if eclipse.total_begin and eclipse.total_end:
                         kind_str = "Total" if eclipse.kind == EclipseKind.Total else "Anular"
-                        rows.insert(1, [f"Início {kind_str}", fmt_dt(to_local(eclipse.total_begin.time, self.tz_name)), f"{fmt_num(eclipse.total_begin.altitude, 2)}°"])
-                        rows.insert(3, [f"Fim {kind_str}", fmt_dt(to_local(eclipse.total_end.time, self.tz_name)), f"{fmt_num(eclipse.total_end.altitude, 2)}°"])
+                        rows.insert(1, [f"Início {kind_str}", fmt_dt(to_local(eclipse.total_begin.time, self.tz_info)), f"{fmt_num(eclipse.total_begin.altitude, 2)}°"])
+                        rows.insert(3, [f"Fim {kind_str}", fmt_dt(to_local(eclipse.total_end.time, self.tz_info)), f"{fmt_num(eclipse.total_end.altitude, 2)}°"])
 
                     self._print_table(rows, ["Evento", "Horário Local", "Altitude do Sol"])
                     print("Nota: Se a altitude do Sol for negativa, o evento ocorre abaixo do horizonte.")
@@ -591,17 +624,18 @@ class AstroCLI:
         
         events.sort(key=lambda x: x[0].ut)
         print(f"\n--- Calendário de Aspectos para {year} ---")
-        rows = [[fmt_dt(to_local(t, self.tz_name)), desc] for t, desc in events]
+        rows = [[fmt_dt(to_local(t, self.tz_info)), desc] for t, desc in events]
         if not rows:
             print("Nenhum aspecto maior encontrado para este ano.")
         else:
             self._print_table(rows, ["Data e Hora (Local)", "Evento"])
 
     def run(self):
+        """Loop principal da aplicação."""
         while True:
-            print("\n" + "="*20 + " Orrery Pro v7 (Profissional) " + "="*20)
+            print("\n" + "="*20 + " Orrery Pro v8 (Robusto) " + "="*20)
             if self.current_city_name:
-                print(f"Localização: {self.current_city_name} | Horário: {fmt_dt(to_local(Time.Now(), self.tz_name))}")
+                print(f"Localização: {self.current_city_name} | Horário: {fmt_dt(to_local(Time.Now(), self.tz_info))}")
             else:
                 print(f"Localização: Nenhuma selecionada | Horário: {fmt_dt(Time.Now().Utc())}")
 
